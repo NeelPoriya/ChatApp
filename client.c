@@ -16,6 +16,8 @@ int clientSocket, ret;
 struct sockaddr_in serverAddr;
 char buffer[1024];
 
+char *temp;
+
 void connectToServer()
 {
     clientSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -29,7 +31,8 @@ void connectToServer()
     memset(&serverAddr, '\0', sizeof(serverAddr));
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(PORT);
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
+    // serverAddr.sin_addr.s_addr = INADDR_ANY;
+    inet_pton(AF_INET, temp, &(serverAddr.sin_addr));
 
     ret = connect(clientSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
     if (ret < 0)
@@ -58,8 +61,9 @@ void refresh()
     printf("Enter your message : ");
 }
 
-int main()
+int main(int argc, char *argv[])
 {
+    temp = argv[1];
     connectToServer();
     char *username = malloc(sizeof(char) * 20);
     int passed = 0;
@@ -142,20 +146,6 @@ int main()
     strcat(buffer, room_name);
     send(clientSocket, buffer, sizeof(buffer), 0);
 
-    // if (fork() == 0)
-    // {
-    //     while (1)
-    //     {
-    //         sleep(2);
-    //         char ref[50] = ":refresh@";
-    //         strcat(ref, room_name);
-
-    //         send(clientSocket, ref, sizeof(ref), 0);
-    //         refresh();
-    //         fflush(stdin);
-    //     }
-    // }
-    // else
     {
         while (1)
         {
