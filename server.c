@@ -8,10 +8,23 @@
 #include <arpa/inet.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include "user.c"
 
 #define PORT 8080
+#define MAX_CLIENTS 500
 char buffer[1024];
+
+typedef struct
+{
+    struct User user;
+    struct sockaddr_in address;
+    char username[20];
+    char room_name[20];
+    int sockfd;
+} client;
+
+client *clients[MAX_CLIENTS];
 
 void send_file(char *path, int sockfd)
 {
@@ -34,7 +47,136 @@ void send_file(char *path, int sockfd)
     fclose(file);
 }
 
-int main()
+void *handle_client(void *arg)
+{
+    client *cli = (client *)arg;
+    int newSocket = cli->sockfd;
+    // close(sockfd);
+
+    while (1)
+    {
+        bzero(buffer, sizeof(buffer));
+        if (recv(newSocket, buffer, 1024, 0) <= 0)
+        {
+            printf("Connection broken!\n");
+            exit(1);
+        }
+        if (strlen(buffer) == 0)
+        {
+            continue;
+        }
+
+        char *command = strtok(buffer, "@");
+        if (strcmp(command, ":exit") == 0)
+        {
+            printf("Disconnected from %s:%d\n", inet_ntoa(cli->address.sin_addr), ntohs(cli->address.sin_port));
+            break;
+        }
+        else if (strcmp(command, ":create") == 0)
+        {
+            char *user_string = strtok(NULL, "@");
+            saveUser(user_string);
+            bzero(buffer, sizeof(buffer));
+            strcpy(buffer, "New User added successfully.");
+            send(newSocket, buffer, sizeof(buffer), 0);
+        }
+        else if (strcmp(command, ":check") == 0)
+        {
+            char *usr = strtok(NULL, ";");
+            char *passwd = strtok(NULL, ";");
+
+            char username[20], password[30];
+            strcpy(username, usr);
+            strcpy(password, passwd);
+            bzero(buffer, sizeof(buffer));
+            if (checkUser(username, password))
+            {
+                strcpy(buffer, "Login Successful.");
+            }
+            else
+            {
+                strcpy(buffer, "No such user exist.");
+            }
+            if (send(newSocket, buffer, sizeof(buffer), 0) == -1)
+            {
+                perror("Error sending in data");
+                exit(EXIT_FAILURE);
+                bzero(buffer, sizeof(buffer));
+            };
+        }
+        else if (strcmp(command, ":room") == 0)
+        {
+            char *room_name_recv = strtok(NULL, ";");
+
+            char path[40];
+            strcpy(path, "./rooms/");
+            strcat(path, room_name_recv);
+            strcat(path, ".txt");
+            // printf("path : %s\n", path);
+
+            send_file(path, newSocket);
+
+            // if file already exists, send all data to client
+        }
+        else if (strcmp(command, ":message") == 0)
+        {
+            char *message = strtok(NULL, ";");
+            char *room_name = strtok(NULL, ";");
+            char *username = strtok(NULL, ";");
+            // printf("Adding : %s to Room %s by user %s\n", message, room_name, username);
+
+            char path[30] = "./rooms/";
+            strcat(path, room_name);
+            strcat(path, ".txt");
+            FILE *fp = fopen(path, "a");
+
+            char formatted_message[strlen(message) + strlen(username) + 5];
+            strcpy(formatted_message, username);
+            strcat(formatted_message, ": ");
+            strcat(formatted_message, message);
+            strcat(formatted_message, "\n");
+
+            fprintf(fp, formatted_message, sizeof(formatted_message));
+            fclose(fp);
+
+            send_file(path, newSocket);
+        }
+        else if (strcmp(command, ":load") == 0)
+        {
+            char path[50] = "./rooms/";
+            char *file_name = strtok(NULL, ";");
+            strcat(path, file_name);
+            strcat(path, ".txt");
+            printf("path : %s\n", path);
+
+            send_file(path, newSocket);
+        }
+        else if (strcmp(command, ":profile") == 0)
+        {
+            char *username_received = strtok(NULL, " ");
+            char username[30];
+            strcpy(username, username_received);
+            printf("Username received : %s\n", username_received);
+            char *profile = getUserProfileString(getUser(username_received));
+            bzero(buffer, sizeof(buffer));
+
+            strcpy(buffer, profile);
+            send(newSocket, buffer, sizeof(buffer), 0);
+            send(newSocket, ":finish\n", 10, 0);
+        }
+        else
+        {
+            printf("%s\n", buffer);
+            send(newSocket, buffer, strlen(buffer), 0);
+            bzero(buffer, sizeof(buffer));
+        }
+    }
+    close(newSocket);
+    pthread_detach(pthread_self());
+    exit(0);
+}
+
+int main(int argc, char *argv[])
 {
 
     int sockfd, ret;
@@ -58,7 +200,9 @@ int main()
     memset(&serverAddr, '\0', sizeof(serverAddr));
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(PORT);
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
+    // serverAddr.sin_addr.s_addr = INADDR_ANY;
+
+    inet_pton(AF_INET, argv[1], &(serverAddr.sin_addr));
 
     int tr = 1;
     // kill "Address already in use" error message
@@ -91,151 +235,20 @@ int main()
 
     while (1)
     {
-        int newSocket = accept(sockfd, (struct sockaddr *)&newAddr, &addr_size);
-        if (newSocket < 0)
+        int newClientFd = accept(sockfd, (struct sockaddr *)&newAddr, &addr_size);
+        if (newClientFd < 0)
         {
             printf("Error in socket connection\n");
             exit(1);
         }
         printf("Connection accepted from %s:%d\n", inet_ntoa(newAddr.sin_addr), ntohs(newAddr.sin_port));
 
-        if ((childpid = fork()) == 0)
-        {
-            close(sockfd);
+        pthread_t pt;
+        client *c = (client *)malloc(sizeof(client));
 
-            while (1)
-            {
-                bzero(buffer, sizeof(buffer));
-                if (recv(newSocket, buffer, 1024, 0) <= 0)
-                {
-                    printf("Connection broken!\n");
-                    exit(1);
-                }
-                if (strlen(buffer) == 0)
-                {
-                    continue;
-                }
-
-                char *command = strtok(buffer, "@");
-                if (strcmp(command, ":exit") == 0)
-                {
-                    printf("Disconnected from %s:%d\n", inet_ntoa(newAddr.sin_addr), ntohs(newAddr.sin_port));
-                    break;
-                }
-                else if (strcmp(command, ":create") == 0)
-                {
-                    char *user_string = strtok(NULL, "@");
-                    saveUser(user_string);
-                    bzero(buffer, sizeof(buffer));
-                    strcpy(buffer, "New User added successfully.");
-                    send(newSocket, buffer, sizeof(buffer), 0);
-                }
-                else if (strcmp(command, ":check") == 0)
-                {
-                    char *usr = strtok(NULL, ";");
-                    char *passwd = strtok(NULL, ";");
-
-                    char username[20], password[30];
-                    strcpy(username, usr);
-                    strcpy(password, passwd);
-                    bzero(buffer, sizeof(buffer));
-                    if (checkUser(username, password))
-                    {
-                        strcpy(buffer, "Login Successful.");
-                    }
-                    else
-                    {
-                        strcpy(buffer, "No such user exist.");
-                    }
-                    if (send(newSocket, buffer, sizeof(buffer), 0) == -1)
-                    {
-                        perror("Error sending in data");
-                        exit(EXIT_FAILURE);
-                        bzero(buffer, sizeof(buffer));
-                    };
-                }
-                else if (strcmp(command, ":room") == 0)
-                {
-                    char *room_name_recv = strtok(NULL, ";");
-
-                    char path[40];
-                    strcpy(path, "./rooms/");
-                    strcat(path, room_name_recv);
-                    strcat(path, ".txt");
-                    // printf("path : %s\n", path);
-
-                    send_file(path, newSocket);
-
-                    // if file already exists, send all data to client
-                }
-                else if (strcmp(command, ":message") == 0)
-                {
-                    char *message = strtok(NULL, ";");
-                    char *room_name = strtok(NULL, ";");
-                    char *username = strtok(NULL, ";");
-                    // printf("Adding : %s to Room %s by user %s\n", message, room_name, username);
-
-                    char path[30] = "./rooms/";
-                    strcat(path, room_name);
-                    strcat(path, ".txt");
-                    FILE *fp = fopen(path, "a");
-
-                    char formatted_message[strlen(message) + strlen(username) + 5];
-                    strcpy(formatted_message, username);
-                    strcat(formatted_message, ": ");
-                    strcat(formatted_message, message);
-                    strcat(formatted_message, "\n");
-
-                    fprintf(fp, formatted_message, sizeof(formatted_message));
-                    fclose(fp);
-
-                    send_file(path, newSocket);
-                }
-                // else if (strcmp(command, ":refresh") == 0)
-                // {
-                //     printf("Request for file\n");
-                //     char *file_name = strtok(NULL, ";");
-                //     char path[50] = "./rooms/";
-                //     strcat(path, file_name);
-                //     strcat(path, ".txt");
-
-                //     printf("path : %s\n", path);
-                //     send_file(path, newSocket);
-                // }
-                else if (strcmp(command, ":load") == 0)
-                {
-                    char path[50] = "./rooms/";
-                    char *file_name = strtok(NULL, ";");
-                    strcat(path, file_name);
-                    strcat(path, ".txt");
-                    printf("path : %s\n", path);
-
-                    send_file(path, newSocket);
-                }
-                else if (strcmp(command, ":profile") == 0)
-                {
-                    char *username_received = strtok(NULL, " ");
-                    char username[30];
-                    strcpy(username, username_received);
-                    printf("Username received : %s\n", username_received);
-                    char *profile = getUserProfileString(getUser(username_received));
-                    bzero(buffer, sizeof(buffer));
-
-                    strcpy(buffer, profile);
-                    send(newSocket, buffer, sizeof(buffer), 0);
-                    send(newSocket, ":finish\n", 10, 0);
-                }
-                else
-                {
-                    printf("%s\n", buffer);
-                    send(newSocket, buffer, strlen(buffer), 0);
-                    bzero(buffer, sizeof(buffer));
-                }
-            }
-            close(newSocket);
-            exit(0);
-        }
-        close(newSocket);
+        c->sockfd = newClientFd;
+        c->address = newAddr;
+        pthread_create(&pt, NULL, handle_client, c);
     }
 
     printf("I am ending\n");
