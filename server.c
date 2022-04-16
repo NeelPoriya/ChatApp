@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/signal.h>
 #include <pthread.h>
 #include "user.c"
 
@@ -15,18 +16,54 @@
 #define MAX_CLIENTS 500
 char buffer[1024];
 
-typedef struct
+struct client
 {
     struct User user;
     struct sockaddr_in address;
     char username[20];
     char room_name[20];
     int sockfd;
-} client;
+};
 
-client *clients[MAX_CLIENTS];
+struct client *clients[MAX_CLIENTS];
+int no_of_clients = 0;
 
-void send_file(char *path, int sockfd)
+// returns 1 for failuer
+// and 0 for success
+int addClient(struct client *cli)
+{
+    if (no_of_clients > MAX_CLIENTS || cli == NULL)
+        return 1;
+    for (int i = 0; i < MAX_CLIENTS; ++i)
+    {
+        if (clients[i] == NULL)
+        {
+            clients[i] = cli;
+            break;
+        }
+    }
+    return 0;
+}
+
+// returns 1 for failuer
+// and 0 for success
+int removeClient(struct client *cli)
+{
+    if (no_of_clients <= 0 || cli == NULL)
+        return 1;
+    for (int i = 0; i < MAX_CLIENTS; ++i)
+    {
+        if (clients[i] == cli)
+        {
+            free(clients[i]);
+            clients[i] = NULL;
+            break;
+        }
+    }
+    return 0;
+}
+
+void send_file(char *path, int sockfd, int clearPageFlag)
 {
     FILE *file = fopen(path, "r");
     if (!file)
@@ -35,9 +72,19 @@ void send_file(char *path, int sockfd)
         return;
     }
 
+    if (clearPageFlag)
+    {
+        if (send(sockfd, ":clear\n", 9, 0) == -1)
+        {
+            printf("error sending clear.\n");
+        }
+    }
     while (fgets(buffer, sizeof(buffer), file))
     {
-        send(sockfd, buffer, sizeof(buffer), 0);
+        if (send(sockfd, buffer, sizeof(buffer), 0) < 0)
+        {
+            printf("Error send to someone\n");
+        }
         bzero(buffer, sizeof(buffer));
     }
     if (send(sockfd, ":finish\n", 9, 0) == -1)
@@ -47,11 +94,32 @@ void send_file(char *path, int sockfd)
     fclose(file);
 }
 
+void send_to_all_members(char *room, char *path)
+{
+    for (int i = 0; i < MAX_CLIENTS; ++i)
+    {
+        if (clients[i] != NULL)
+        {
+            if (!strcmp(clients[i]->room_name, room))
+            {
+                printf("Sending file to %s\n", clients[i]->username);
+                send_file(path, clients[i]->sockfd, 1);
+            }
+        }
+    }
+}
+
 void *handle_client(void *arg)
 {
-    client *cli = (client *)arg;
+    struct client *cli = (struct client *)arg;
     int newSocket = cli->sockfd;
-    // close(sockfd);
+
+    if (addClient(cli))
+    {
+        printf("Unable to add client to main array\n");
+        pthread_exit(NULL);
+    };
+    no_of_clients++;
 
     while (1)
     {
@@ -59,7 +127,7 @@ void *handle_client(void *arg)
         if (recv(newSocket, buffer, 1024, 0) <= 0)
         {
             printf("Connection broken!\n");
-            exit(1);
+            pthread_exit(NULL);
         }
         if (strlen(buffer) == 0)
         {
@@ -76,8 +144,17 @@ void *handle_client(void *arg)
         {
             char *user_string = strtok(NULL, "@");
             saveUser(user_string);
+
+            char temp[50];
+            sprintf(temp, "%s", user_string);
+            strtok(temp, ";");
+            char *user_name = strtok(NULL, ";");
+
+            strcpy(cli->username, user_name);
+
             bzero(buffer, sizeof(buffer));
             strcpy(buffer, "New User added successfully.");
+
             send(newSocket, buffer, sizeof(buffer), 0);
         }
         else if (strcmp(command, ":check") == 0)
@@ -87,7 +164,9 @@ void *handle_client(void *arg)
 
             char username[20], password[30];
             strcpy(username, usr);
+            strcpy(cli->username, usr);
             strcpy(password, passwd);
+
             bzero(buffer, sizeof(buffer));
             if (checkUser(username, password))
             {
@@ -102,19 +181,27 @@ void *handle_client(void *arg)
                 perror("Error sending in data");
                 exit(EXIT_FAILURE);
                 bzero(buffer, sizeof(buffer));
-            };
+            }
         }
         else if (strcmp(command, ":room") == 0)
         {
             char *room_name_recv = strtok(NULL, ";");
+            strcpy(cli->room_name, room_name_recv);
 
             char path[40];
             strcpy(path, "./rooms/");
             strcat(path, room_name_recv);
             strcat(path, ".txt");
+
+            if (access(path, 0) != 0)
+            {
+                FILE *fp = fopen(path, "w");
+                fclose(fp);
+            }
+
             // printf("path : %s\n", path);
 
-            send_file(path, newSocket);
+            send_file(path, newSocket, 0);
 
             // if file already exists, send all data to client
         }
@@ -139,7 +226,8 @@ void *handle_client(void *arg)
             fprintf(fp, formatted_message, sizeof(formatted_message));
             fclose(fp);
 
-            send_file(path, newSocket);
+            // send_file(path, newSocket);
+            send_to_all_members(cli->room_name, path);
         }
         else if (strcmp(command, ":load") == 0)
         {
@@ -149,7 +237,7 @@ void *handle_client(void *arg)
             strcat(path, ".txt");
             printf("path : %s\n", path);
 
-            send_file(path, newSocket);
+            send_file(path, newSocket, 1);
         }
         else if (strcmp(command, ":profile") == 0)
         {
@@ -171,14 +259,21 @@ void *handle_client(void *arg)
             bzero(buffer, sizeof(buffer));
         }
     }
+
+    if (removeClient(cli))
+    {
+        printf("Unable to remove client from main array.\n");
+        pthread_exit(NULL);
+    };
+    no_of_clients--;
+
     close(newSocket);
     pthread_detach(pthread_self());
-    exit(0);
+    pthread_exit(NULL);
 }
 
 int main(int argc, char *argv[])
 {
-
     int sockfd, ret;
     struct sockaddr_in serverAddr;
 
@@ -244,11 +339,11 @@ int main(int argc, char *argv[])
         printf("Connection accepted from %s:%d\n", inet_ntoa(newAddr.sin_addr), ntohs(newAddr.sin_port));
 
         pthread_t pt;
-        client *c = (client *)malloc(sizeof(client));
+        struct client *c = (struct client *)malloc(sizeof(struct client));
 
         c->sockfd = newClientFd;
         c->address = newAddr;
-        pthread_create(&pt, NULL, handle_client, c);
+        pthread_create(&pt, NULL, handle_client, (void *)c);
     }
 
     printf("I am ending\n");
