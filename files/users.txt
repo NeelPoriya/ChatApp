@@ -1,5 +1,2 @@
-Ramesh bhai;rameshbhoi;123@rameshbhai;01-12-2002;23-08-2020 14:05:30;20;Raaj karna hai hame
-neel poriya;neelporiya1309;123@Neel;10-34-3023;online;10;hello this is coola
-asdf;asdf;asdf;adsf;online;10;adsf
-neel;neel;123;13-09-2020;online;10;hello
-kishan;kishan;123;jj;jj;online;10;jj
+Neel Poriya;neel123;123neel;10-09-2002;online;20;Hey there! I am using ChatApp!
+Kishan;kishan#23;#23kishan;23-11-2002;online;20;Jay Shree Krishna

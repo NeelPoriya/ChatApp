@@ -13,6 +13,7 @@
 #include "user.c"
 
 #define PORT 8080
+#define COLOURS 12
 
 int clientSocket, ret;
 struct sockaddr_in serverAddr;
@@ -20,6 +21,8 @@ char buffer[1024];
 
 char *temp;
 char *room_name, *username;
+char **usernames;
+char *colours[] = { "\033[3;91m","\033[3;92m","\033[3;93m","\033[3;94m","\033[3;95m","\033[3;96m","\033[3;33m","\033[3;33m", "\033[3;35m", "\033[3;31m", "\033[3;32m", "\033[3;36m"};
 
 int isReading = 0;
 
@@ -31,13 +34,12 @@ void connectToServer()
         printf("[-]Error in connection.\n");
         exit(1);
     }
-    printf("[+]Client Socket is created.\n");
 
     memset(&serverAddr, '\0', sizeof(serverAddr));
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(PORT);
-    // serverAddr.sin_addr.s_addr = INADDR_ANY;
-    inet_pton(AF_INET, temp, &(serverAddr.sin_addr));
+    serverAddr.sin_addr.s_addr = INADDR_ANY;
+    //inet_pton(AF_INET, temp, &(serverAddr.sin_addr));
 
     ret = connect(clientSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
     if (ret < 0)
@@ -45,7 +47,6 @@ void connectToServer()
         printf("[-]Error in connection.\n");
         exit(1);
     }
-    printf("[+]Connected to Server.\n");
 }
 
 void exit_handler()
@@ -57,16 +58,22 @@ void exit_handler()
 
 void *send_message_func(void *arg)
 {
+    char *message = (char *)malloc(sizeof(char) * 100);
     while (1)
     {
-        char *message = (char *)malloc(sizeof(char) * 100);
         getchar();
-        scanf("%[^\n]s", message);
-        system("clear");
+        do{
+            scanf("%[^\n]s", message);
+        }while(strlen(message) == 0);
 
-        // printf("%s\n", message);
+        if (strlen(message) == 0){
+            printf("\033[0;32m");
+            printf("\nEnter your message : \033[0m \n");
+            continue;
+        }
+        fflush(stdin);
+
         char *cmd = strtok(message, "@");
-        // printf("%s\n", cmd);
 
         if (!strcmp(cmd, "load"))
         {
@@ -106,6 +113,25 @@ void *send_message_func(void *arg)
     }
 }
 
+int get_colour_index(char *username)
+{
+    for (int i = 0; i < 100; ++i)
+    {
+        if (usernames[i] == NULL)
+        {
+            usernames[i] = (char *)malloc(sizeof(char) * 30);
+            strcpy(usernames[i], username);
+            return i % COLOURS;
+        }
+        if ((usernames[i] != NULL) && (strcmp(username, usernames[i]) == 0))
+        {
+            return i % COLOURS;
+        }
+    }
+}
+
+int first_time_receiving = 1;
+
 void *receive_message_func(void *arg)
 {
     bzero(buffer, sizeof(buffer));
@@ -113,36 +139,76 @@ void *receive_message_func(void *arg)
     {
         if (!strcmp(buffer, ":clear\n"))
         {
+            // for (int i = 0; i < 40; ++i)
+            //     printf("\n");
             system("clear");
-            sleep(0.01);
+            // sleep(0.5);
         }
         else if (!strcmp(buffer, ":finish\n"))
         {
             bzero(buffer, sizeof(buffer));
             printf("\033[0;32m");
             printf("\nEnter your message : \033[0m \n");
-            continue;
+            first_time_receiving = 1;
         }
         else
         {
-            printf("%s", buffer);
+            if(first_time_receiving){
+                first_time_receiving = 0;
+                // for(int i = 0; i < 40; ++i) printf("\n");
+                system("clear");
+            }
+            
+            // printf("%s", buffer);
+            char* profile_test = strtok(buffer, "\n");
+            if(!strcmp(profile_test, ":profile")){
+                while(profile_test!= NULL){
+                    profile_test = strtok(NULL, "\n");
+                    if(!strcmp(profile_test, ":end")){
+                        break;
+                    }
+                    printf("%s\n", profile_test);
+                }
+                bzero(buffer, sizeof(buffer));
+                continue;
+            }
+            char* usrname = strtok(buffer, ":");
+            char* chat = strtok(NULL, "\n");
+
+            int colour_index = get_colour_index(usrname);
+            printf("%s", colours[colour_index]);
+            printf("%s", usrname);
+
+            printf("\033[0;37m:%s\n", chat);
+
         }
+
         bzero(buffer, sizeof(buffer));
     }
 }
 
 int main(int argc, char *argv[])
 {
+
+    usernames = (char **)malloc(sizeof(char *) * 100);
+    memset(usernames, 0, sizeof(usernames));
+
     signal(SIGINT, exit_handler);
 
-    temp = argv[1];
+    //temp = argv[1];
     connectToServer();
-    username = (char *)malloc(sizeof(char) * 20);
+    username = (char *)malloc(sizeof(char) * 30);
     room_name = (char *)malloc(sizeof(char) * 20);
     int passed = 0;
 
     // Ask for creating a user or login
-    printf("------------------------- Welcome to ChatApp ------------------------------\n");
+    
+    FILE* fp = fopen("chatapp.txt", "r");
+    char chatapp_text[1000];
+    while(fgets(chatapp_text, sizeof(chatapp_text), fp)){
+        printf("%s", chatapp_text);
+    }
+    printf("\n\n");
     while (!passed)
     {
         printf("1. Create a new User account.\n");
@@ -164,7 +230,7 @@ int main(int argc, char *argv[])
                 strcpy(buffer, ":create@");
                 strcat(buffer, convertToString(newUser));
 
-                printf("Sending : %s\n", buffer);
+                // printf("Sending : %s\n", buffer);
                 send(clientSocket, buffer, sizeof(buffer), 0);
 
                 bzero(buffer, sizeof(buffer));
@@ -179,13 +245,17 @@ int main(int argc, char *argv[])
             break;
 
         case 2:;
-            char *password = malloc(sizeof(char) * 30);
+            char *password = malloc(sizeof(char) * 20);
 
-            printf("Enter your username : ");
-            scanf("%[^\n]s", username), getchar();
+            do{
+                printf("Enter your username : ");
+                scanf("%[^\n]s", username), getchar();
+            }while(username == NULL || strlen(username) == 0 || strlen(username) > 30);
 
-            printf("Enter your password : ");
-            scanf("%[^\n]s", password), getchar();
+            do{
+                printf("Enter your password : ");
+                scanf("%[^\n]s", password), getchar();
+            }while(password == NULL || strlen(password) == 0 || strlen(password) > 20);
 
             bzero(buffer, sizeof(buffer));
             strcat(buffer, ":check@");
@@ -196,7 +266,7 @@ int main(int argc, char *argv[])
 
             bzero(buffer, sizeof(buffer));
             recv(clientSocket, buffer, sizeof(buffer), 0);
-            printf("Server response : %s\n", buffer);
+            printf("\nServer response : %s\n", buffer);
 
             if (!strcmp(buffer, "Login Successful."))
             {
@@ -212,7 +282,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    printf("\n------------------ Welcome to room selection ------------------\n");
+    printf("\n\n------------------ Welcome to room selection ------------------\n");
     printf("(If you don't have room, just type a name and you will create one)\n\nEnter your room name : ");
     scanf("%[^\n]s", room_name);
 

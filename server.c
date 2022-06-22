@@ -69,27 +69,21 @@ void send_file(char *path, int sockfd, int clearPageFlag)
     if (!file)
     {
         printf("file not found!");
-        return;
+        return; 
     }
 
-    if (clearPageFlag)
-    {
-        if (send(sockfd, ":clear\n", 9, 0) == -1)
-        {
-            printf("error sending clear.\n");
-        }
-    }
     while (fgets(buffer, sizeof(buffer), file))
     {
         if (send(sockfd, buffer, sizeof(buffer), 0) < 0)
         {
             printf("Error send to someone\n");
+            break;
         }
         bzero(buffer, sizeof(buffer));
     }
     if (send(sockfd, ":finish\n", 9, 0) == -1)
     {
-        printf("error sending stuff.\n");
+        printf("Error sending stuff.\n");
     }
     fclose(file);
 }
@@ -102,7 +96,6 @@ void send_to_all_members(char *room, char *path)
         {
             if (!strcmp(clients[i]->room_name, room))
             {
-                printf("Sending file to %s\n", clients[i]->username);
                 send_file(path, clients[i]->sockfd, 1);
             }
         }
@@ -126,7 +119,7 @@ void *handle_client(void *arg)
         bzero(buffer, sizeof(buffer));
         if (recv(newSocket, buffer, 1024, 0) <= 0)
         {
-            printf("Connection broken!\n");
+            printf("Connection with %s ended!\n", cli->username);
             pthread_exit(NULL);
         }
         if (strlen(buffer) == 0)
@@ -182,6 +175,8 @@ void *handle_client(void *arg)
                 exit(EXIT_FAILURE);
                 bzero(buffer, sizeof(buffer));
             }
+
+            updateSession(cli->username, 0);
         }
         else if (strcmp(command, ":room") == 0)
         {
@@ -198,9 +193,6 @@ void *handle_client(void *arg)
                 FILE *fp = fopen(path, "w");
                 fclose(fp);
             }
-
-            // printf("path : %s\n", path);
-
             send_file(path, newSocket, 0);
 
             // if file already exists, send all data to client
@@ -210,7 +202,6 @@ void *handle_client(void *arg)
             char *message = strtok(NULL, ";");
             char *room_name = strtok(NULL, ";");
             char *username = strtok(NULL, ";");
-            // printf("Adding : %s to Room %s by user %s\n", message, room_name, username);
 
             char path[30] = "./rooms/";
             strcat(path, room_name);
@@ -226,7 +217,6 @@ void *handle_client(void *arg)
             fprintf(fp, formatted_message, sizeof(formatted_message));
             fclose(fp);
 
-            // send_file(path, newSocket);
             send_to_all_members(cli->room_name, path);
         }
         else if (strcmp(command, ":load") == 0)
@@ -235,7 +225,7 @@ void *handle_client(void *arg)
             char *file_name = strtok(NULL, ";");
             strcat(path, file_name);
             strcat(path, ".txt");
-            printf("path : %s\n", path);
+            // printf("path : %s\n", path);
 
             send_file(path, newSocket, 1);
         }
@@ -244,17 +234,18 @@ void *handle_client(void *arg)
             char *username_received = strtok(NULL, " ");
             char username[30];
             strcpy(username, username_received);
-            printf("Username received : %s\n", username_received);
+            
             char *profile = getUserProfileString(getUser(username_received));
             bzero(buffer, sizeof(buffer));
-
-            strcpy(buffer, profile);
+            
+            strcpy(buffer, ":profile\n");
+            strcat(buffer, profile);
+            strcat(buffer, ":end\n");
             send(newSocket, buffer, sizeof(buffer), 0);
             send(newSocket, ":finish\n", 10, 0);
         }
         else
         {
-            printf("%s\n", buffer);
             send(newSocket, buffer, strlen(buffer), 0);
             bzero(buffer, sizeof(buffer));
         }
@@ -267,6 +258,7 @@ void *handle_client(void *arg)
     };
     no_of_clients--;
 
+    updateSession(cli->username, 1);
     close(newSocket);
     pthread_detach(pthread_self());
     pthread_exit(NULL);
@@ -290,14 +282,14 @@ int main(int argc, char *argv[])
         printf("[-]Error in connection.\n");
         exit(1);
     }
-    printf("[+]Server Socket is created.\n");
+    printf("[+]Connection Established\n");
 
     memset(&serverAddr, '\0', sizeof(serverAddr));
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(PORT);
-    // serverAddr.sin_addr.s_addr = INADDR_ANY;
+    serverAddr.sin_addr.s_addr = INADDR_ANY; //localhost
 
-    inet_pton(AF_INET, argv[1], &(serverAddr.sin_addr));
+    // inet_pton(AF_INET, argv[1], &(serverAddr.sin_addr));
 
     int tr = 1;
     // kill "Address already in use" error message
@@ -311,22 +303,19 @@ int main(int argc, char *argv[])
     {
         printf("[-]Error in binding.\n");
 
-        perror(" Some error");
+        perror("");
         close(sockfd);
         exit(1);
     }
-    printf("[+]Bind to port %d\n", PORT);
+    printf("[+]Binding successful!\n");
 
-    if (listen(sockfd, 10) == 0)
-    {
-        printf("[+]Listening....\n");
-    }
-    else
+    if (listen(sockfd, 100) != 0)
     {
         printf("[-]Error in binding.\n");
-        perror(" Some error");
+        perror("");
         close(sockfd);
     }
+    printf("[+]Listening\n");
 
     while (1)
     {
@@ -345,7 +334,5 @@ int main(int argc, char *argv[])
         c->address = newAddr;
         pthread_create(&pt, NULL, handle_client, (void *)c);
     }
-
-    printf("I am ending\n");
     return 0;
 }

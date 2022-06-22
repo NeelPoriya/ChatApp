@@ -1,8 +1,7 @@
-%.o: %.c
-	gcc -c $<
+all: server client
 
-server: server.o client.o client
-	gcc -pthread  -o server server.o
+server: server.c user.c
+	gcc -pthread  -o server server.c
 
-client: client.o
-	gcc -pthread -o client client.o
+client: client.c user.c
+	gcc -pthread -o client client.c
